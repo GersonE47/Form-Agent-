@@ -1,12 +1,13 @@
-"""Pre-Call Crew - Orchestrates pre-call intelligence gathering."""
+"""Pre-Call Crew - Orchestrates pre-call intelligence gathering with async support."""
 
 import logging
-from typing import Optional, Dict, Any
+import asyncio
+from typing import Optional
 from crewai import Crew, Process
 
-from src.agents.research_agent import ResearchAgentFactory
-from src.agents.scoring_agent import ScoringAgentFactory
-from src.agents.personalization_agent import PersonalizationAgentFactory
+from src.intelligence.agents.research import ResearchAgentFactory
+from src.intelligence.agents.scoring import ScoringAgentFactory
+from src.intelligence.agents.personalization import PersonalizationAgentFactory
 from src.models import (
     ParsedLead,
     CompanyResearch,
@@ -21,14 +22,14 @@ logger = logging.getLogger(__name__)
 
 class PreCallCrew:
     """
-    Pre-Call Intelligence Crew.
+    Pre-Call Intelligence Crew with async support.
 
     Orchestrates the sequential execution of:
     1. Research Agent - Gather company intelligence
     2. Scoring Agent - Qualify and score the lead
     3. Personalization Agent - Create call strategy
 
-    The output from each agent feeds into the next.
+    Uses asyncio.to_thread() to prevent blocking the event loop.
     """
 
     def __init__(self):
@@ -36,23 +37,37 @@ class PreCallCrew:
         self.research_agent = ResearchAgentFactory.create()
         self.scoring_agent = ScoringAgentFactory.create()
         self.personalization_agent = PersonalizationAgentFactory.create()
+        logger.info("Pre-call crew initialized")
 
-        logger.info("Pre-call crew initialized with all agents")
+    async def run_async(self, lead: ParsedLead) -> PreCallResult:
+        """
+        Execute the pre-call crew asynchronously.
+
+        Wraps synchronous CrewAI operations in asyncio.to_thread()
+        to prevent blocking the event loop.
+
+        Args:
+            lead: Parsed lead data
+
+        Returns:
+            PreCallResult with all outputs
+        """
+        logger.info(f"Starting async pre-call crew for {lead.company_name}")
+
+        # Run the synchronous crew in a thread pool
+        return await asyncio.to_thread(self.run, lead)
 
     def run(self, lead: ParsedLead) -> PreCallResult:
         """
-        Execute the pre-call intelligence crew.
+        Execute the pre-call intelligence crew (synchronous).
 
-        Runs agents sequentially:
-        1. Research → research_output
-        2. Scoring (uses research) → scoring_output
-        3. Personalization (uses both) → personalization_output
+        For async contexts, use run_async() instead.
 
         Args:
-            lead: Parsed lead data from form submission
+            lead: Parsed lead data
 
         Returns:
-            PreCallResult with all outputs and any errors
+            PreCallResult with all outputs
         """
         logger.info(f"Starting pre-call crew for {lead.company_name}")
 
@@ -65,19 +80,17 @@ class PreCallCrew:
         scoring = self._run_scoring(lead, research, result)
 
         # Step 3: Personalization Agent
-        personalization = self._run_personalization(lead, research, scoring, result)
+        self._run_personalization(lead, research, scoring, result)
 
         # Log completion
         if result.success:
             logger.info(
                 f"Pre-call crew completed for {lead.company_name} - "
-                f"Score: {scoring.total_score if scoring else 'N/A'}, "
-                f"Tier: {scoring.category.value if scoring else 'N/A'}"
+                f"Score: {scoring.total_score if scoring else 'N/A'}"
             )
         else:
             logger.warning(
-                f"Pre-call crew completed with errors for {lead.company_name}: "
-                f"{result.errors}"
+                f"Pre-call crew completed with errors: {result.errors}"
             )
 
         return result
@@ -91,13 +104,11 @@ class PreCallCrew:
         try:
             logger.info(f"Running Research Agent for {lead.company_name}")
 
-            # Create the research task
             task = ResearchAgentFactory.create_research_task(
                 self.research_agent,
                 lead
             )
 
-            # Create mini-crew for just this task
             crew = Crew(
                 agents=[self.research_agent],
                 tasks=[task],
@@ -106,17 +117,15 @@ class PreCallCrew:
                 memory=True
             )
 
-            # Execute
             crew.kickoff()
 
-            # Get output
             if task.output and task.output.pydantic:
                 research = task.output.pydantic
                 result.research = research
                 logger.info(f"Research completed - Industry: {research.industry}")
                 return research
             else:
-                logger.warning("Research task returned no structured output")
+                logger.warning("Research returned no structured output")
                 result.errors.append("Research returned no output")
                 return self._get_fallback_research(lead)
 
@@ -135,14 +144,12 @@ class PreCallCrew:
         try:
             logger.info(f"Running Scoring Agent for {lead.company_name}")
 
-            # Create the scoring task
             task = ScoringAgentFactory.create_scoring_task(
                 self.scoring_agent,
                 lead,
                 research
             )
 
-            # Create mini-crew
             crew = Crew(
                 agents=[self.scoring_agent],
                 tasks=[task],
@@ -151,20 +158,15 @@ class PreCallCrew:
                 memory=True
             )
 
-            # Execute
             crew.kickoff()
 
-            # Get output
             if task.output and task.output.pydantic:
                 scoring = task.output.pydantic
                 result.scoring = scoring
-                logger.info(
-                    f"Scoring completed - Score: {scoring.total_score}, "
-                    f"Category: {scoring.category.value}"
-                )
+                logger.info(f"Scoring completed - Score: {scoring.total_score}")
                 return scoring
             else:
-                logger.warning("Scoring task returned no structured output")
+                logger.warning("Scoring returned no structured output")
                 result.errors.append("Scoring returned no output")
                 return self._get_fallback_scoring(lead)
 
@@ -184,7 +186,6 @@ class PreCallCrew:
         try:
             logger.info(f"Running Personalization Agent for {lead.company_name}")
 
-            # Create the personalization task
             task = PersonalizationAgentFactory.create_personalization_task(
                 self.personalization_agent,
                 lead,
@@ -192,7 +193,6 @@ class PreCallCrew:
                 scoring
             )
 
-            # Create mini-crew
             crew = Crew(
                 agents=[self.personalization_agent],
                 tasks=[task],
@@ -201,17 +201,15 @@ class PreCallCrew:
                 memory=True
             )
 
-            # Execute
             crew.kickoff()
 
-            # Get output
             if task.output and task.output.pydantic:
                 personalization = task.output.pydantic
                 result.personalization = personalization
                 logger.info("Personalization completed")
                 return personalization
             else:
-                logger.warning("Personalization task returned no structured output")
+                logger.warning("Personalization returned no output")
                 result.errors.append("Personalization returned no output")
                 return self._get_fallback_personalization(lead)
 
@@ -236,15 +234,13 @@ class PreCallCrew:
 
     def _get_fallback_scoring(self, lead: ParsedLead) -> LeadScoring:
         """Create default scoring when agent fails."""
-        # Basic scoring based on available data
-        budget_score = (lead.infrastructure_criticality or 3) * 5  # 5-25
+        budget_score = (lead.infrastructure_criticality or 3) * 5
         timeline_score = 15 if lead.timeline else 8
         fit_score = 15 if lead.primary_goal else 10
         engagement_score = 15 if lead.business_challenges else 10
 
         total = budget_score + timeline_score + fit_score + engagement_score
 
-        # Determine category
         if total >= 70:
             category = LeadCategory.HOT
         elif total >= 40:
@@ -259,51 +255,35 @@ class PreCallCrew:
             timeline_score=timeline_score,
             fit_score=fit_score,
             engagement_score=engagement_score,
-            scoring_rationale="Fallback scoring based on form data only - AI scoring failed",
+            scoring_rationale="Fallback scoring - AI scoring failed",
             priority_notes="Manual review recommended"
         )
 
-    def _get_fallback_personalization(
-        self,
-        lead: ParsedLead
-    ) -> PersonalizationContext:
+    def _get_fallback_personalization(self, lead: ParsedLead) -> PersonalizationContext:
         """Create minimal personalization when agent fails."""
         return PersonalizationContext(
-            custom_opener=f"Thank you for your interest in Nodari AI, {lead.company_name}. "
-                         f"I'd love to learn more about your AI initiatives.",
-            pain_point_reference=f"You mentioned interest in {lead.primary_goal or 'AI solutions'}. "
-                                 f"Tell me more about what prompted that.",
-            value_proposition="At Nodari AI, we help companies implement custom AI solutions "
-                            "that drive real business results.",
+            custom_opener=f"Thank you for your interest in Nodari AI, {lead.company_name}.",
+            pain_point_reference=f"You mentioned interest in {lead.primary_goal or 'AI solutions'}.",
+            value_proposition="We help companies implement custom AI solutions that drive real results.",
             talking_points=[
                 "Understand their specific use case",
                 "Discuss timeline and priorities",
-                "Identify decision makers",
-                "Explore budget considerations"
+                "Identify decision makers"
             ],
             suggested_questions=[
-                "What's driving your interest in AI right now?",
-                "What would success look like for this project?",
-                "Who else is involved in this decision?",
-                "What's your ideal timeline?",
-                "Have you worked with AI solutions before?"
+                "What's driving your interest in AI?",
+                "What would success look like?",
+                "Who else is involved in this decision?"
             ],
             objection_handlers={
-                "We're not ready yet": "I understand. Many companies start with a discovery "
-                                       "conversation to understand what's possible. No commitment needed.",
-                "Budget is tight": "That's common. We can discuss options that fit different "
-                                  "investment levels, or start with a pilot.",
-                "We're exploring other options": "That makes sense. I'd love to understand "
-                                                 "what you're looking for so I can share how we differ.",
-                "Need to talk to my team": "Absolutely. Would it help if I sent over some "
-                                          "information you could share with them?"
+                "Not ready yet": "No commitment needed - let's explore what's possible.",
+                "Budget is tight": "We have options for different investment levels."
             },
-            call_strategy="Focus on discovery and understanding their needs. "
-                         "Build rapport and identify next steps."
+            call_strategy="Focus on discovery and understanding their needs."
         )
 
 
-def run_pre_call_crew(lead: ParsedLead) -> PreCallResult:
-    """Convenience function to run pre-call crew."""
+async def run_pre_call_crew_async(lead: ParsedLead) -> PreCallResult:
+    """Convenience function to run pre-call crew asynchronously."""
     crew = PreCallCrew()
-    return crew.run(lead)
+    return await crew.run_async(lead)

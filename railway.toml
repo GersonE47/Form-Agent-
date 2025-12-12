@@ -1,0 +1,15 @@
+[build]
+builder = "nixpacks"
+
+[build.nixpacksPlan.phases.setup]
+nixPkgs = ["python311", "gcc", "pango", "fontconfig", "gdk-pixbuf", "libffi", "cairo", "glib"]
+
+[build.nixpacksPlan.phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[deploy]
+startCommand = "uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+healthcheckPath = "/test/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

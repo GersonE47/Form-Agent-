@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.config import get_settings
+from src.core.config import get_settings
 from src.api.webhooks import router as webhook_router, test_router
 
 

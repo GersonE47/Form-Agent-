@@ -13,13 +13,13 @@ class Settings(BaseSettings):
     # ===========================================
     # Supabase Configuration
     # ===========================================
-    SUPABASE_URL: str = Field(..., description="Supabase project URL")
-    SUPABASE_KEY: str = Field(..., description="Supabase anon key")
+    SUPABASE_URL: str = Field(default="", description="Supabase project URL")
+    SUPABASE_KEY: str = Field(default="", description="Supabase anon key")
 
     # ===========================================
     # OpenAI Configuration (for CrewAI)
     # ===========================================
-    OPENAI_API_KEY: str = Field(..., description="OpenAI API key")
+    OPENAI_API_KEY: str = Field(default="", description="OpenAI API key")
     OPENAI_MODEL: str = Field(default="gpt-4-turbo-preview", description="Model for CrewAI agents")
 
     # ===========================================
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # ===========================================
     # Firecrawl Configuration
     # ===========================================
-    FIRECRAWL_API_KEY: str = Field(..., description="Firecrawl API key for web scraping")
+    FIRECRAWL_API_KEY: str = Field(default="", description="Firecrawl API key for web scraping")
 
     # ===========================================
     # Google Service Account Configuration
@@ -84,17 +84,16 @@ class Settings(BaseSettings):
 # Google Form Field Mapping
 # ===========================================
 # Maps Google Form field names (including trailing spaces) to internal field names
-# Update this mapping if your Google Form field names change
 
 GOOGLE_FORM_FIELD_MAPPING: Dict[str, str] = {
     # Basic contact info (note trailing spaces from Google Forms)
     "Name ": "company_name",
-    "Name": "company_name",  # Fallback without space
+    "Name": "company_name",
     "Email": "email",
     "Phone Number ": "phone",
-    "Phone Number": "phone",  # Fallback
+    "Phone Number": "phone",
     "Website ": "website",
-    "Website": "website",  # Fallback
+    "Website": "website",
 
     # Form questions
     "What is your primary goal for implementing a custom AI system?": "primary_goal",
@@ -114,11 +113,6 @@ GOOGLE_FORM_FIELD_MAPPING: Dict[str, str] = {
 def map_form_fields(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Map Google Form fields to internal field names.
-
-    Handles:
-    - Field names with trailing spaces
-    - Direct field name matching
-    - Passthrough of unmapped fields
 
     Args:
         raw_data: Raw form submission data from Google Apps Script
@@ -148,51 +142,40 @@ def map_form_fields(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def format_phone_number(phone: str) -> str:
+def format_phone_number(phone: Optional[str]) -> Optional[str]:
     """
-    Format phone number for Retell API.
-
-    Ensures phone number is in E.164 format: +1XXXXXXXXXX
+    Format phone number for Retell API (E.164 format).
 
     Args:
         phone: Raw phone number string
 
     Returns:
-        Formatted phone number with +1 prefix
+        Formatted phone number with +1 prefix or None
     """
     if not phone:
-        return ""
+        return None
 
     # Remove all non-numeric characters
     digits = "".join(c for c in str(phone) if c.isdigit())
 
+    if not digits:
+        return None
+
     # Handle different formats
     if len(digits) == 10:
-        # US number without country code
         return f"+1{digits}"
     elif len(digits) == 11 and digits.startswith("1"):
-        # US number with country code
         return f"+{digits}"
-    elif digits.startswith("+"):
-        return digits
+    elif len(digits) >= 10:
+        return f"+1{digits[-10:]}"
     else:
-        # Assume US and add +1
-        return f"+1{digits[-10:]}" if len(digits) >= 10 else f"+1{digits}"
+        return None
 
 
 def parse_infrastructure_criticality(value: Any) -> Optional[int]:
-    """
-    Parse infrastructure criticality score from form.
-
-    Args:
-        value: Raw value from form (could be string, int, etc.)
-
-    Returns:
-        Integer 1-5 or None
-    """
+    """Parse infrastructure criticality score from form."""
     if value is None:
         return None
-
     try:
         score = int(str(value).strip())
         return score if 1 <= score <= 5 else None
@@ -202,21 +185,13 @@ def parse_infrastructure_criticality(value: Any) -> Optional[int]:
 
 @lru_cache()
 def get_settings() -> Settings:
-    """
-    Get cached application settings.
-
-    Returns:
-        Settings instance loaded from environment
-    """
+    """Get cached application settings."""
     return Settings()
 
 
 # ===========================================
 # Retell Dynamic Variable Names
 # ===========================================
-# These are the variable names expected by the Retell AI agent
-# Update your Retell agent prompt to use these variables
-
 RETELL_DYNAMIC_VARS = {
     "customer_name": "Contact/company name",
     "company_name": "Company name",
@@ -230,31 +205,4 @@ RETELL_DYNAMIC_VARS = {
     "pain_point_reference": "Reference to their specific pain points",
     "value_proposition": "Tailored value proposition",
     "call_strategy": "Recommended approach for the call",
-    "objection_budget": "Response for budget objections",
-    "objection_timing": "Response for timing objections",
 }
-
-
-# ===========================================
-# Status Constants
-# ===========================================
-class LeadStatus:
-    """Lead status values for tracking progress."""
-    NEW = "new"
-    RESEARCHED = "researched"
-    RESEARCH_FAILED = "research_failed"
-    CALL_INITIATED = "call_initiated"
-    CALL_FAILED = "call_failed"
-    CALL_COMPLETED = "call_completed"
-    ANALYZED = "analyzed"
-    HOT_PROCESSED = "hot_processed"
-    WARM_PROCESSED = "warm_processed"
-    NURTURE_PROCESSED = "nurture_processed"
-    PROCESSING_FAILED = "processing_failed"
-
-
-class LeadTier:
-    """Lead tier classifications."""
-    HOT = "hot"
-    WARM = "warm"
-    NURTURE = "nurture"

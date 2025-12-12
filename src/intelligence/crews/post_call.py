@@ -1,13 +1,14 @@
-"""Post-Call Crew - Orchestrates post-call analysis and actions."""
+"""Post-Call Crew - Orchestrates post-call analysis and actions with async support."""
 
 import logging
+import asyncio
 from typing import Optional
 from datetime import datetime
 from crewai import Crew, Process
 
-from src.agents.analysis_agent import AnalysisAgentFactory
-from src.agents.proposal_agent import ProposalAgentFactory
-from src.config import get_settings
+from src.intelligence.agents.analysis import AnalysisAgentFactory
+from src.intelligence.agents.proposal import ProposalAgentFactory
+from src.core.config import get_settings
 from src.models import (
     InquiryRecord,
     CallAnalysis,
@@ -15,22 +16,24 @@ from src.models import (
     PostCallResult,
     CallSentiment
 )
-from src.tools.calendar_tool import calendar_service
-from src.tools.email_tool import email_service
-from src.tools.proposal_generator import proposal_generator
+from src.integrations.calendar import calendar_service
+from src.integrations.email import email_service
+from src.integrations.pdf import pdf_generator
 
 logger = logging.getLogger(__name__)
 
 
 class PostCallCrew:
     """
-    Post-Call Processing Crew.
+    Post-Call Processing Crew with async support.
 
     Orchestrates:
     1. Analysis Agent - Parse transcript for insights
     2. Routing Logic - Determine follow-up based on interest
     3. Proposal Agent - Generate proposal for hot leads
     4. Calendar booking and email sending
+
+    Uses asyncio.to_thread() for blocking operations.
     """
 
     def __init__(self):
@@ -38,8 +41,37 @@ class PostCallCrew:
         self.analysis_agent = AnalysisAgentFactory.create()
         self.proposal_agent = ProposalAgentFactory.create()
         self.settings = get_settings()
-
         logger.info("Post-call crew initialized")
+
+    async def run_async(
+        self,
+        inquiry: InquiryRecord,
+        transcript: str,
+        call_summary: Optional[str] = None,
+        recording_url: Optional[str] = None
+    ) -> PostCallResult:
+        """
+        Execute post-call processing asynchronously.
+
+        Args:
+            inquiry: Original inquiry record
+            transcript: Call transcript
+            call_summary: Optional summary from Retell
+            recording_url: Optional recording URL
+
+        Returns:
+            PostCallResult with all outcomes
+        """
+        logger.info(f"Starting async post-call crew for {inquiry.company_name}")
+
+        # Run synchronous crew in thread pool
+        return await asyncio.to_thread(
+            self.run,
+            inquiry,
+            transcript,
+            call_summary,
+            recording_url
+        )
 
     def run(
         self,
@@ -49,14 +81,9 @@ class PostCallCrew:
         recording_url: Optional[str] = None
     ) -> PostCallResult:
         """
-        Execute post-call processing.
+        Execute post-call processing (synchronous).
 
-        Steps:
-        1. Analyze transcript
-        2. Route based on interest level
-        3. For HOT: Generate proposal + book meeting + send email
-        4. For WARM: Send case study email
-        5. For NURTURE: Send nurture email
+        For async contexts, use run_async() instead.
 
         Args:
             inquiry: Original inquiry record
@@ -75,7 +102,7 @@ class PostCallCrew:
         analysis = self._run_analysis(inquiry, transcript, call_summary, result)
 
         if not analysis:
-            logger.error("Analysis failed - cannot proceed with routing")
+            logger.error("Analysis failed - cannot proceed")
             result.success = False
             return result
 
@@ -95,34 +122,11 @@ class PostCallCrew:
             self._process_nurture_lead(inquiry, analysis, result)
 
         logger.info(
-            f"Post-call crew completed for {inquiry.company_name} - "
-            f"Email sent: {result.email_sent}, "
-            f"Meeting booked: {result.meeting_booked}"
+            f"Post-call crew completed - "
+            f"Email sent: {result.email_sent}, Meeting booked: {result.meeting_booked}"
         )
 
         return result
-
-    def run_analysis_only(
-        self,
-        inquiry: InquiryRecord,
-        transcript: str,
-        call_summary: Optional[str] = None
-    ) -> Optional[CallAnalysis]:
-        """
-        Run just the analysis agent without routing.
-
-        Useful for testing or when you want to handle routing separately.
-
-        Args:
-            inquiry: Inquiry record
-            transcript: Call transcript
-            call_summary: Optional Retell summary
-
-        Returns:
-            CallAnalysis or None on failure
-        """
-        result = PostCallResult(success=True)
-        return self._run_analysis(inquiry, transcript, call_summary, result)
 
     def _run_analysis(
         self,
@@ -154,13 +158,10 @@ class PostCallCrew:
 
             if task.output and task.output.pydantic:
                 analysis = task.output.pydantic
-                logger.info(
-                    f"Analysis completed - Interest: {analysis.interest_level}, "
-                    f"Sentiment: {analysis.sentiment.value}"
-                )
+                logger.info(f"Analysis completed - Interest: {analysis.interest_level}")
                 return analysis
             else:
-                logger.warning("Analysis task returned no structured output")
+                logger.warning("Analysis returned no output")
                 result.errors.append("Analysis returned no output")
                 return self._get_fallback_analysis(transcript, call_summary)
 
@@ -183,8 +184,7 @@ class PostCallCrew:
 
         if proposal:
             result.proposal = proposal
-            # Generate PDF
-            pdf_path = proposal_generator.markdown_to_pdf(
+            pdf_path = pdf_generator.markdown_to_pdf(
                 proposal.markdown_content,
                 inquiry.company_name
             )
@@ -278,13 +278,13 @@ class PostCallCrew:
                 logger.info("Proposal generated successfully")
                 return proposal
             else:
-                logger.warning("Proposal task returned no structured output")
+                logger.warning("Proposal returned no output")
                 result.errors.append("Proposal generation returned no output")
                 return None
 
         except Exception as e:
             logger.error(f"Proposal Agent failed: {e}")
-            result.errors.append(f"Proposal generation failed: {str(e)}")
+            result.errors.append(f"Proposal failed: {str(e)}")
             return None
 
     def _book_meeting(
@@ -300,26 +300,21 @@ class PostCallCrew:
                 result.errors.append("Calendar service not configured")
                 return None
 
-            # Parse the meeting time
             meeting_time = None
             if analysis.proposed_meeting_time:
                 meeting_time = calendar_service.parse_meeting_time(
                     analysis.proposed_meeting_time
                 )
 
-            # If parsing failed, find next available slot
             if not meeting_time:
-                logger.info("Could not parse meeting time, finding next available slot")
-                meeting_time = calendar_service.find_available_slot(
-                    datetime.now()
-                )
+                logger.info("Finding next available slot")
+                meeting_time = calendar_service.find_available_slot(datetime.now())
 
             if not meeting_time:
-                logger.warning("Could not find available meeting slot")
+                logger.warning("No available meeting slots")
                 result.errors.append("No available meeting slots")
                 return None
 
-            # Create the meeting
             meeting_link = calendar_service.create_meeting(
                 attendee_email=inquiry.email,
                 company_name=inquiry.company_name,
@@ -346,13 +341,12 @@ class PostCallCrew:
         call_summary: Optional[str]
     ) -> CallAnalysis:
         """Create fallback analysis when agent fails."""
-        # Use summary if available, otherwise truncate transcript
         summary = call_summary or f"Call transcript ({len(transcript)} chars)"
 
         return CallAnalysis(
             call_summary=summary[:500],
             sentiment=CallSentiment.NEUTRAL,
-            interest_level=50,  # Default to middle
+            interest_level=50,
             key_pain_points=[],
             objections_raised=[],
             buying_signals=[],
@@ -367,12 +361,12 @@ class PostCallCrew:
         )
 
 
-def run_post_call_crew(
+async def run_post_call_crew_async(
     inquiry: InquiryRecord,
     transcript: str,
     call_summary: Optional[str] = None,
     recording_url: Optional[str] = None
 ) -> PostCallResult:
-    """Convenience function to run post-call crew."""
+    """Convenience function to run post-call crew asynchronously."""
     crew = PostCallCrew()
-    return crew.run(inquiry, transcript, call_summary, recording_url)
+    return await crew.run_async(inquiry, transcript, call_summary, recording_url)

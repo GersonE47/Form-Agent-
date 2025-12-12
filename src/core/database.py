@@ -6,8 +6,7 @@ from datetime import datetime
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
 
-from src.config import get_settings
-from src.models import InquiryRecord, ParsedLead
+from src.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,43 +16,46 @@ class DatabaseService:
     Service for Supabase database operations.
 
     Handles all CRUD operations for the nodari_inquiries table.
+    Uses sync Supabase client but exposed through async interface
+    for consistency with the rest of the application.
     """
 
     TABLE_NAME = "nodari_inquiries"
 
     def __init__(self):
         """Initialize Supabase client."""
-        settings = get_settings()
-        self.client: Client = create_client(
-            settings.SUPABASE_URL,
-            settings.SUPABASE_KEY,
-            options=ClientOptions(
-                postgrest_client_timeout=30,
-                storage_client_timeout=30
+        self._client: Optional[Client] = None
+
+    @property
+    def client(self) -> Client:
+        """Lazy initialization of Supabase client."""
+        if self._client is None:
+            settings = get_settings()
+            if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
+                raise ValueError("Supabase credentials not configured")
+
+            self._client = create_client(
+                settings.SUPABASE_URL,
+                settings.SUPABASE_KEY,
+                options=ClientOptions(
+                    postgrest_client_timeout=30,
+                    storage_client_timeout=30
+                )
             )
-        )
-        logger.info("Supabase client initialized")
+            logger.info("Supabase client initialized")
+        return self._client
 
     # ===========================================
     # Create Operations
     # ===========================================
 
-    async def create_inquiry(self, lead: ParsedLead) -> Optional[str]:
-        """
-        Create a new inquiry record from parsed lead data.
-
-        Args:
-            lead: Parsed lead data from form submission
-
-        Returns:
-            Inquiry ID if successful, None otherwise
-        """
+    async def create_inquiry(self, lead: "ParsedLead") -> Optional[str]:
+        """Create a new inquiry record from parsed lead data."""
         try:
             data = lead.model_dump(exclude_none=True, exclude={"raw_form_data"})
             data["status"] = "new"
             data["created_at"] = datetime.utcnow().isoformat()
 
-            # Store raw form data as JSONB
             if lead.raw_form_data:
                 data["raw_form_data"] = lead.raw_form_data
 
@@ -75,17 +77,11 @@ class DatabaseService:
     # Read Operations
     # ===========================================
 
-    async def get_inquiry(self, inquiry_id: str) -> Optional[InquiryRecord]:
-        """
-        Fetch inquiry by ID.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-
-        Returns:
-            InquiryRecord if found, None otherwise
-        """
+    async def get_inquiry(self, inquiry_id: str) -> Optional["InquiryRecord"]:
+        """Fetch inquiry by ID."""
         try:
+            from src.models import InquiryRecord
+
             response = (
                 self.client.table(self.TABLE_NAME)
                 .select("*")
@@ -104,17 +100,11 @@ class DatabaseService:
             logger.error(f"Failed to get inquiry {inquiry_id}: {e}")
             return None
 
-    async def get_inquiry_by_call_id(self, call_id: str) -> Optional[InquiryRecord]:
-        """
-        Fetch inquiry by Retell call ID.
-
-        Args:
-            call_id: Retell call ID
-
-        Returns:
-            InquiryRecord if found, None otherwise
-        """
+    async def get_inquiry_by_call_id(self, call_id: str) -> Optional["InquiryRecord"]:
+        """Fetch inquiry by Retell call ID."""
         try:
+            from src.models import InquiryRecord
+
             response = (
                 self.client.table(self.TABLE_NAME)
                 .select("*")
@@ -137,18 +127,11 @@ class DatabaseService:
         self,
         status: str,
         limit: int = 100
-    ) -> List[InquiryRecord]:
-        """
-        Fetch inquiries by status.
-
-        Args:
-            status: Status to filter by
-            limit: Maximum records to return
-
-        Returns:
-            List of matching InquiryRecords
-        """
+    ) -> List["InquiryRecord"]:
+        """Fetch inquiries by status."""
         try:
+            from src.models import InquiryRecord
+
             response = (
                 self.client.table(self.TABLE_NAME)
                 .select("*")
@@ -160,39 +143,10 @@ class DatabaseService:
 
             if response.data:
                 return [InquiryRecord(**record) for record in response.data]
-
             return []
 
         except Exception as e:
             logger.error(f"Failed to get inquiries by status {status}: {e}")
-            return []
-
-    async def get_recent_inquiries(self, limit: int = 50) -> List[InquiryRecord]:
-        """
-        Fetch most recent inquiries.
-
-        Args:
-            limit: Maximum records to return
-
-        Returns:
-            List of recent InquiryRecords
-        """
-        try:
-            response = (
-                self.client.table(self.TABLE_NAME)
-                .select("*")
-                .order("created_at", desc=True)
-                .limit(limit)
-                .execute()
-            )
-
-            if response.data:
-                return [InquiryRecord(**record) for record in response.data]
-
-            return []
-
-        except Exception as e:
-            logger.error(f"Failed to get recent inquiries: {e}")
             return []
 
     # ===========================================
@@ -204,18 +158,8 @@ class DatabaseService:
         inquiry_id: str,
         updates: Dict[str, Any]
     ) -> bool:
-        """
-        Update inquiry with partial data.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-            updates: Dictionary of fields to update
-
-        Returns:
-            True if successful, False otherwise
-        """
+        """Update inquiry with partial data."""
         try:
-            # Add updated_at timestamp
             updates["updated_at"] = datetime.utcnow().isoformat()
 
             response = (
@@ -239,24 +183,12 @@ class DatabaseService:
     async def update_research(
         self,
         inquiry_id: str,
-        research_data: Dict[str, Any],
+        research_data: Optional[Dict[str, Any]],
         lead_score: int,
         lead_category: str,
-        scoring_details: Dict[str, Any]
+        scoring_details: Optional[Dict[str, Any]]
     ) -> bool:
-        """
-        Update inquiry with research and scoring results.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-            research_data: Research Agent output
-            lead_score: Calculated lead score
-            lead_category: Lead tier (hot/warm/nurture)
-            scoring_details: Scoring Agent output
-
-        Returns:
-            True if successful
-        """
+        """Update inquiry with research and scoring results."""
         return await self.update_inquiry(inquiry_id, {
             "company_research": research_data,
             "lead_score": lead_score,
@@ -265,21 +197,8 @@ class DatabaseService:
             "status": "researched"
         })
 
-    async def update_call_initiated(
-        self,
-        inquiry_id: str,
-        call_id: str
-    ) -> bool:
-        """
-        Update inquiry when Retell call is initiated.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-            call_id: Retell call ID
-
-        Returns:
-            True if successful
-        """
+    async def update_call_initiated(self, inquiry_id: str, call_id: str) -> bool:
+        """Update inquiry when Retell call is initiated."""
         return await self.update_inquiry(inquiry_id, {
             "retell_call_id": call_id,
             "status": "call_initiated"
@@ -292,19 +211,8 @@ class DatabaseService:
         recording_url: Optional[str] = None,
         duration_seconds: Optional[int] = None
     ) -> bool:
-        """
-        Update inquiry when call completes.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-            transcript: Call transcript
-            recording_url: URL to call recording
-            duration_seconds: Call duration
-
-        Returns:
-            True if successful
-        """
-        updates = {
+        """Update inquiry when call completes."""
+        updates: Dict[str, Any] = {
             "call_transcript": transcript,
             "status": "call_completed"
         }
@@ -320,16 +228,7 @@ class DatabaseService:
         inquiry_id: str,
         analysis_data: Dict[str, Any]
     ) -> bool:
-        """
-        Update inquiry with post-call analysis.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-            analysis_data: Analysis Agent output
-
-        Returns:
-            True if successful
-        """
+        """Update inquiry with post-call analysis."""
         return await self.update_inquiry(inquiry_id, {
             "call_analysis": analysis_data,
             "status": "analyzed"
@@ -340,80 +239,36 @@ class DatabaseService:
         inquiry_id: str,
         proposal_url: str,
         meeting_booked: bool = False,
-        meeting_datetime: Optional[datetime] = None,
         meeting_link: Optional[str] = None
     ) -> bool:
-        """
-        Update inquiry after hot lead processing.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-            proposal_url: Path/URL to generated proposal
-            meeting_booked: Whether meeting was booked
-            meeting_datetime: Scheduled meeting time
-            meeting_link: Calendar event link
-
-        Returns:
-            True if successful
-        """
-        updates = {
+        """Update inquiry after hot lead processing."""
+        updates: Dict[str, Any] = {
             "proposal_url": proposal_url,
-            "proposal_sent_at": datetime.utcnow().isoformat(),
             "meeting_booked": meeting_booked,
             "followup_sent": True,
-            "followup_type": "hot_proposal",
             "status": "hot_processed"
         }
-        if meeting_datetime:
-            updates["meeting_datetime"] = meeting_datetime.isoformat()
         if meeting_link:
             updates["meeting_link"] = meeting_link
 
         return await self.update_inquiry(inquiry_id, updates)
 
     async def update_warm_processed(self, inquiry_id: str) -> bool:
-        """
-        Update inquiry after warm lead processing.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-
-        Returns:
-            True if successful
-        """
+        """Update inquiry after warm lead processing."""
         return await self.update_inquiry(inquiry_id, {
             "followup_sent": True,
-            "followup_type": "warm_case_study",
             "status": "warm_processed"
         })
 
     async def update_nurture_processed(self, inquiry_id: str) -> bool:
-        """
-        Update inquiry after nurture lead processing.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-
-        Returns:
-            True if successful
-        """
+        """Update inquiry after nurture lead processing."""
         return await self.update_inquiry(inquiry_id, {
             "followup_sent": True,
-            "followup_type": "nurture_email",
             "status": "nurture_processed"
         })
 
     async def update_status(self, inquiry_id: str, status: str) -> bool:
-        """
-        Update inquiry status.
-
-        Args:
-            inquiry_id: UUID of the inquiry
-            status: New status value
-
-        Returns:
-            True if successful
-        """
+        """Update inquiry status."""
         return await self.update_inquiry(inquiry_id, {"status": status})
 
     # ===========================================
@@ -421,28 +276,19 @@ class DatabaseService:
     # ===========================================
 
     async def health_check(self) -> bool:
-        """
-        Check database connectivity.
-
-        Returns:
-            True if database is accessible
-        """
+        """Check database connectivity."""
         try:
-            response = (
-                self.client.table(self.TABLE_NAME)
-                .select("id")
-                .limit(1)
-                .execute()
-            )
+            self.client.table(self.TABLE_NAME).select("id").limit(1).execute()
             return True
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return False
 
 
-# ===========================================
-# Singleton Instance
-# ===========================================
+# Forward reference imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from src.models import ParsedLead, InquiryRecord
 
-# Create singleton instance for use throughout the application
+# Singleton instance
 db_service = DatabaseService()
