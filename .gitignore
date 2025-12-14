@@ -205,3 +205,38 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ===========================================
+# Security - Credentials & Secrets
+# ===========================================
+
+# Service account keys and credentials
+credentials/*.json
+!credentials/.gitkeep
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+
+# Local secrets
+.secrets/
+secrets/
+*.secret
+*.secrets
+
+# Claude Code local config
+.claude/
+
+# Output files that may contain sensitive data
+output/proposals/*.pdf
+
+# Local environment overrides
+.env.local
+.env.*.local
+settings.local.json
+
+# Backup files that might contain secrets
+*.bak
+*.backup
+*.old

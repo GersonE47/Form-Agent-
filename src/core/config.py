@@ -26,15 +26,15 @@ class Settings(BaseSettings):
     # Retell AI Configuration
     # ===========================================
     RETELL_API_KEY: str = Field(
-        default="key_2e5cca188be7ee662cc822b137f0",
+        default="",
         description="Retell AI API key"
     )
     RETELL_AGENT_ID: str = Field(
-        default="agent_a045eb2c986224824cdda7c531",
+        default="",
         description="Retell AI agent ID"
     )
     RETELL_FROM_NUMBER: str = Field(
-        default="+18883257459",
+        default="",
         description="Outbound phone number"
     )
     RETELL_API_URL: str = Field(
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
         description="Path to Google service account JSON"
     )
     GOOGLE_CALENDAR_ID: str = Field(
-        default="admin@nodari.ai",
+        default="",
         description="Calendar ID to book meetings"
     )
 
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
         default="http://localhost:8000",
         description="Base URL for webhooks"
     )
-    DEBUG: bool = Field(default=True, description="Debug mode")
+    DEBUG: bool = Field(default=False, description="Debug mode - set True only in development")
 
     # ===========================================
     # Lead Scoring Thresholds

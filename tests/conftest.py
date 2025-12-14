@@ -214,7 +214,7 @@ def mock_google_calendar():
             "htmlLink": "https://calendar.google.com/event?id=event_test_123"
         }
         mock_service.freebusy.return_value.query.return_value.execute.return_value = {
-            "calendars": {"admin@nodari.ai": {"busy": []}}
+            "calendars": {"test@example.com": {"busy": []}}
         }
         mock.return_value = mock_service
         yield mock
