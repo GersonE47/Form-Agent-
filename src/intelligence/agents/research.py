@@ -2,7 +2,7 @@
 
 import logging
 from crewai import Agent, Task
-from crewai_tools import tool
+from crewai.tools import tool
 
 from src.models import ParsedLead, CompanyResearch
 from src.integrations.firecrawl import firecrawl_service

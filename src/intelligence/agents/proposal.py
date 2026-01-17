@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 from crewai import Agent, Task
-from crewai_tools import tool
+from crewai.tools import tool
 
 from src.models import ProposalContent, InquiryRecord, CallAnalysis
 from src.integrations.pdf import pdf_generator
